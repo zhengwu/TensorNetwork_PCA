@@ -1,0 +1,231 @@
+
+%%%%%%
+%3/14/17
+%real data example
+%High Order PCA for brain networks
+clear all;
+close all;
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%load HCP data - tensor networks and covariates
+% data are produced by using parameters 20-240mm, desikan 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+load('data/HCP_200sub_data.mat');
+% CAS_networs 68*68*200, 200 CSA networks from 200 HCP subjects (see Zhang
+% et. al. 2018 NeuroImage for the definition of CSA network)
+
+% ReadEng_AgeAdj - Test score of read English test, see HCP (https://db.humanconnectome.org) for more
+% details. 
+
+
+subN = 200;
+Kcomp = 30;
+
+selected_tensor = CSA_networks;
+
+        %remove the mean
+        mean_X = mean(selected_tensor,3);
+        for isub = 1:size(selected_tensor,3)
+            X_c(:,:,isub) = selected_tensor(:,:,isub) - mean_X;
+        end
+        X_tensor = tensor(X_c);
+        
+        [Vo,DiagDo,Do,Uo] = hooi_popNet(X_tensor,Kcomp);
+        options = struct('proj',1);
+        options.startv = Vo;
+        options.startu = Uo;
+        [V,D,U,W,Xh] = hopca_popNet(X_tensor,Kcomp,options);
+      
+        newU = U;
+
+        low_score_U = newU(1:length(low_score_id),1:Kcomp);
+        high_score_U = newU((length(low_score_id)+1):(length(low_score_id) + length(high_score_id)),1:Kcomp);
+        
+        mean_low_score_U = mean(low_score_U,1);
+        mean_high_score_U =  mean(high_score_U,1);
+        dist_Us = norm(mean_high_score_U - mean_low_score_U);
+        
+          %plot the first 3 PC scores;
+        figure(100);clf;
+        for i=1:size(low_score_U,1)
+            hold on;
+            scatter3(low_score_U(i,1),low_score_U(i,2),low_score_U(i,3),80,low_score(i),'fill')
+        end
+        for i=1:size(high_score_U,1)
+            hold on;
+            scatter3(high_score_U(i,1),high_score_U(i,2),high_score_U(i,3),80,high_score(i),'fill')
+        end
+        set(gca,'fontsize',26)
+        %title(sprintf('ifeature %d, imeasure %d',ifeat,imeasure))
+        colormap(parula);
+        grid on;
+        
+        
+     
+%         %adjust the Y_measure
+%         selected_Y = Y_measure([low_score_id;high_score_id]);
+%         selected_age = age([low_score_id;high_score_id]);
+%         selected_gender = gender([low_score_id;high_score_id]);
+%         
+%         Y_Training = selected_Y;
+%         age_Training = selected_age;
+%         gender_Training = selected_gender;
+%         
+%         tbl1_train = table;
+%         
+%         tbl1_train.trait_score = Y_Training;
+%         tbl1_train.age = age_Training';
+%         tbl1_train.gender = gender_Training';
+%         
+%         model_linear_str = ['trait_score~gender'];
+%         lm_train_linear = fitlm(tbl1_train,model_linear_str);
+%         pred_train = predict(lm_train_linear,tbl1_train);
+%         Yhat = Y_Training - pred_train;
+        
+        
+        newU = U;
+        Y_measure = Y_measure([low_score_id;high_score_id]);    
+       
+        %%%%%%%% LDA Analysis
+%         pls_U = newU(:,1:Kcomp);
+%         pls_Y = Y_measure;
+        
+
+        lda_U = newU;
+        lda_Y = Y_measure;
+        
+        lda_label = [groupid1,groupid2];
+
+        [w,t,fp]=fisher_training(lda_U,lda_label');
+        
+        %calculate the classification rate;
+        trainrest = fp>t;
+        C = confusionmat(lda_label,double(trainrest)');
+        sum(diag(C))/length(lda_label);
+        
+        %find the best threshold;
+        minr = min(fp);
+        maxr = max(fp);
+         
+         idx = 1;
+         for th = minr: 0.001:maxr
+             trainrest = fp>th;
+             C = confusionmat(lda_label,double(trainrest)');
+             rate(idx) = sum(diag(C))/(length(lda_label));
+             if(rate(idx)>0.8098)
+                 C
+             end
+             
+             idx = idx + 1;
+             
+         end
+         max(rate)
+         
+         
+        w = w/norm(w);
+               
+        meanX = mean(lda_U,1);
+        meanY = mean(lda_Y);
+        
+        proj_dir = w;
+       
+        if(Kcomp == 3)
+            figure(100); hold on;
+            arrow([0,0,0]',proj_dir/5);
+        end
+        
+        proj_X0 = proj_dir'*(lda_U - meanX)';
+        Y0 = lda_Y - meanY;
+        
+        figure(10), plot(proj_X0,Y0,'*');
+        title(sprintf('ifeature %d, imeasure %d',ifeature,imeasure));
+        [tmpR,temP]=corrcoef(Y0,proj_X0);
+        
+        R_PLS_Allmeasure(ifeat, imeas) = tmpR(1,2);
+        P_PLS_Allmeasure(ifeat, imeas) = temP(1,2);
+
+        %study the correlation between the mapped data and the obervations;
+        
+        
+        ampl_factor = 1;
+        idx = 1;
+        for ss = -1:0.1:1
+            PC1(idx,:) = meanX + ss*ampl_factor*proj_dir';
+            pc_networks(idx,:,:) = squeeze(double(ktensor(D(1:Kcomp)',V(:,1:Kcomp),V(:,1:Kcomp),squeeze(PC1(idx,:)))));
+            idx = idx + 1;
+        end
+        
+%         %define a threshold;
+%         Nnode = 68;
+%         Diffnetwork = squeeze(pc_networks(end,:,:) - pc_networks(1,:,:));
+%         idx = 1;
+%         for ii=1:Nnode
+%             for jj=ii+1:Nnode
+%                 vect_Diffnetwork(idx) = Diffnetwork(ii,jj);
+%                 idx = idx + 1;
+%             end
+%         end
+%         sorted_vect_Diffnetwork = sort(abs(vect_Diffnetwork),'descend');
+%         
+%         thred = sorted_vect_Diffnetwork(50);
+%         bd_network = Diffnetwork>thred;
+%         
+        %load a mask;
+        Nnode = 68;
+        load HCP_wholebrain_common_bd_network_desikan_r80.mat;
+        %bd_network = bd_network(20:end,20:end);
+        bd_network = ones(68,68);
+        
+        for ii = 1:size(pc_networks,1)
+            thrd_pc_networks(ii,:,:) = bd_network.*squeeze(pc_networks(ii,:,:));
+        end
+        
+        %display the figure ~ from the mean
+%         figure(1);clf;
+%         imagesc(squeeze(thrd_pc_networks(1,:,:)));
+%         colorbar;
+%         figure(2);clf;
+%         imagesc(squeeze(thrd_pc_networks(end,:,:)));
+%         colorbar;
+        
+       %save LDA_Cov67 thrd_pc_networks pc_networks;
+        
+        figure(10);clf;
+        for ipc = 1: size(thrd_pc_networks,1)
+            figure(10);clf;
+            pc_nt1 = squeeze(thrd_pc_networks(ipc,:,:));
+            max1 = max(max(abs(thrd_pc_networks(1,:,:))));
+            max2 = max(max(abs(thrd_pc_networks(end,:,:))));
+            maxv = max([max1,max2]);
+            
+            mycolormap=jet(2*ceil(maxv*100)+1);
+            graycolor = [105,105,105]/255;
+            
+            for i=1:Nnode
+                for j=1:Nnode
+                    if(pc_nt1(i,j)==0)
+                        pcnet1_img(i,j,:) = graycolor;
+                    else
+                        pcnet1_img(i,j,:) = mycolormap( min(ceil(maxv*100)+1 + ceil((pc_nt1(i,j))*100),2*ceil(maxv*100)+1),:);
+                    end
+                end
+            end
+            
+            image(pcnet1_img);
+            colormap jet;
+            d = colorbar;
+            caxis([-maxv,maxv])
+            d.FontSize = 18;
+            set(gca,'fontsize',20);
+            title(sprintf('ifeature %d, imeasure %d',ifeature,imeasure));
+            pause(0.01);
+        end
+        
+        %more data visulization
+        
+        keyboard;
+        pause(1);
+    end
+       
+end
